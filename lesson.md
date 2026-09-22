@@ -105,6 +105,8 @@ Service → Repository
 
 If a request fails security checks, it never reaches the controller.
 
+> **Note:** Because security runs in the filter chain, a `401` or `403` never reaches your controller — which means your existing `@RestControllerAdvice` and `ErrorResponse` format do **not** apply to security errors. Spring Security returns its own default response instead.
+
 ---
 
 ## Part 3: Authentication vs Authorization
@@ -136,6 +138,11 @@ Examples:
 - Different roles have different permissions
 
 In this lesson, we will use **role-based authorization**.
+
+### The Two Status Codes
+
+- **401 Unauthorized** — you have not proven who you are (authentication failed)
+- **403 Forbidden** — we know who you are, but you are not allowed to do this (authorization failed)
 
 ---
 
@@ -173,9 +180,50 @@ You will now receive:
 
 This confirms that Spring Security is active.
 
+> **Note:** Any MockMvc tests written in Lesson 3.19 will now return `401` and fail when you run `mvn test`. Testing secured endpoints is out of scope for this lesson.
+
 ---
 
-## Part 5: Default Spring Security Behavior
+## Part 5: Logging In for the First Time
+
+Before we write any configuration, we need to actually get into the API.
+
+### Option A: The Generated Password
+
+When the application starts, Spring Security creates **one** user:
+
+- Username: `user`
+- Password: a random value printed in the console
+
+Scroll up in your terminal and look for a line like this:
+
+```
+Using generated security password: 8f3a2b91-4c7d-4e2a-9b11-0d5e6f7a8c12
+```
+
+Copy that value. In **Postman**, open the **Authorization** tab, choose **Basic Auth**, and enter `user` as the username and the copied value as the password. In a **browser**, a login popup will appear — enter the same two values.
+
+> **Important:** This password is regenerated on every restart, and with DevTools enabled, on every reload. If you suddenly get `401` again after saving a file, this is why.
+
+### Option B: Set Your Own in `application.properties`
+
+Because the generated password keeps changing, set a fixed one instead:
+
+```properties
+spring.security.user.name=admin
+spring.security.user.password=admin123
+spring.security.user.roles=ADMIN
+```
+
+Restart the application. The generated password line no longer appears, and you can now log in with `admin` / `admin123` every time.
+
+> **Note:** These properties are only used when no user store is defined in Java. Once we create a `UserDetailsService` bean in Part 11, they are ignored completely.
+
+> **Note:** A plain-text password in a properties file is not acceptable in production. We address this in Part 10.
+
+---
+
+## Part 6: Default Spring Security Behavior
 
 By default, Spring Security:
 - Enables HTTP Basic authentication
@@ -186,13 +234,13 @@ This default behavior is **not suitable for production**, but it helps us unders
 
 ---
 
-## Part 6: Creating a Custom Security Configuration
+## Part 7: Creating a Custom Security Configuration
 
 To control security behavior, we create a **Security Configuration class**.
 
 ### Step 1: Create SecurityConfig
 
-Create a new class:
+Create a new class in the `config` folder:
 
 ```
 src/main/java/.../config/SecurityConfig.java
@@ -211,9 +259,27 @@ This class will define:
 - How authentication works
 - What roles are required
 
+### Imports Used in This Class
+
+```java
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.core.userdetails.User;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.provisioning.InMemoryUserDetailsManager;
+import org.springframework.security.web.SecurityFilterChain;
+```
+
 ---
 
-## Part 7: In-Memory Authentication (For Learning)
+## Part 8: In-Memory Authentication (For Learning)
 
 For learning purposes, we will use **in-memory users**.
 
@@ -227,7 +293,7 @@ This is **not** how production systems work, but it is perfect for learning.
 
 ---
 
-## Part 8: Configuring Basic Authentication
+## Part 9: Configuring Basic Authentication
 
 Add the following method inside `SecurityConfig`:
 
@@ -238,10 +304,10 @@ public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Excepti
     http
         .csrf(csrf -> csrf.disable())
         .authorizeHttpRequests(auth -> auth
-            .requestMatchers("/customers").authenticated()
+            .requestMatchers("/customers/**").authenticated()
             .anyRequest().permitAll()
         )
-        .httpBasic();
+        .httpBasic(Customizer.withDefaults());
 
     return http.build();
 }
@@ -249,36 +315,14 @@ public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Excepti
 
 ### Explanation
 
-- CSRF is disabled because we are building a stateless REST API
-- `/customers` requires authentication
+- CSRF protection is disabled because we are calling the API from Postman, not from a browser form
+- `/customers/**` requires authentication — the `/**` also covers `/customers/{id}`
 - All other endpoints are temporarily permitted
 - HTTP Basic authentication is enabled
 
----
+> **Note:** `httpBasic()` must be written as `httpBasic(Customizer.withDefaults())`. The older no-argument version was removed in Spring Security 7, which ships with Spring Boot 4.
 
-## Part 9: Creating Users with Roles
-
-Now let’s define users and roles.
-
-```java
-@Bean
-public UserDetailsService userDetailsService(PasswordEncoder passwordEncoder) {
-
-    User user = User.builder()
-        .username("user")
-        .password(passwordEncoder.encode("password"))
-        .roles("USER")
-        .build();
-
-    User admin = User.builder()
-        .username("admin")
-        .password(passwordEncoder.encode("admin123"))
-        .roles("ADMIN")
-        .build();
-
-    return new InMemoryUserDetailsManager(user, admin);
-}
-```
+> **Note:** If your `CustomerController` is mapped at `/api/customers`, use that path in the matchers instead.
 
 ---
 
@@ -305,20 +349,49 @@ public PasswordEncoder passwordEncoder() {
 
 ---
 
-## Part 11: Role-Based Authorization (RBAC)
+## Part 11: Creating Users with Roles
+
+Now let’s define users and roles.
+
+```java
+@Bean
+public UserDetailsService userDetailsService(PasswordEncoder passwordEncoder) {
+
+    UserDetails user = User.builder()
+        .username("user")
+        .password(passwordEncoder.encode("password"))
+        .roles("USER")
+        .build();
+
+    UserDetails admin = User.builder()
+        .username("admin")
+        .password(passwordEncoder.encode("admin123"))
+        .roles("ADMIN")
+        .build();
+
+    return new InMemoryUserDetailsManager(user, admin);
+}
+```
+
+> **Note:** `build()` returns a `UserDetails`, not a `User`. `User` is only the builder.
+
+> **Note:** `.roles("ADMIN")` actually stores the authority `ROLE_ADMIN`. `hasRole("ADMIN")` adds that prefix back for you; `hasAuthority("ADMIN")` does not and will fail.
+
+Once this bean exists, the `spring.security.user.*` properties from Part 5 are ignored. You may remove them.
+
+---
+
+## Part 12: Role-Based Authorization (RBAC)
 
 Now let’s enhance security by applying **role-based rules**.
 
-We will use **ONE simple endpoint** as a demonstration:
-```
-GET /customers
-```
-
-Update the security rules:
+Update the security rules inside `securityFilterChain`:
 
 ```java
 .authorizeHttpRequests(auth -> auth
-    .requestMatchers(HttpMethod.GET, "/customers").hasAnyRole("USER", "ADMIN")
+    .requestMatchers(HttpMethod.GET, "/customers/**").hasAnyRole("USER", "ADMIN")
+    .requestMatchers(HttpMethod.POST, "/customers/**").hasRole("ADMIN")
+    .requestMatchers(HttpMethod.PUT, "/customers/**").hasRole("ADMIN")
     .requestMatchers(HttpMethod.DELETE, "/customers/**").hasRole("ADMIN")
     .anyRequest().authenticated()
 )
@@ -327,19 +400,21 @@ Update the security rules:
 ### What This Means
 
 - Both USER and ADMIN can view customers
-- Only ADMIN can delete customers
-- All requests require authentication
+- Only ADMIN can create, update, or delete customers
+- All other requests require authentication
 
 ---
 
-## Part 12: Testing with Postman
+## Part 13: Testing with Postman
+
+In Postman, set credentials under the **Authorization** tab → **Basic Auth**.
 
 ### Test as USER
 - Username: `user`
 - Password: `password`
 - Try:
   - GET `/customers` → ✅ Allowed
-  - DELETE `/customers/{id}` → ❌ Forbidden
+  - DELETE `/customers/{id}` → ❌ 403 Forbidden
 
 ### Test as ADMIN
 - Username: `admin`
@@ -348,28 +423,31 @@ Update the security rules:
   - GET `/customers` → ✅ Allowed
   - DELETE `/customers/{id}` → ✅ Allowed
 
+### Test with No Credentials
+- GET `/customers` → ❌ 401 Unauthorized
+
 This demonstrates **both authentication and authorization on the same endpoint**.
 
 ---
 
-## Part 13: Guided Hands-On Activity
+## Part 14: Guided Hands-On Activity
 
 ### Activity 1 (Instructor-Guided)
 
-- Secure the `GET /customers/{id}` endpoint
+- Add an **explicit** rule for `GET /customers/{id}`, placed above the `/customers/**` rule
 - Allow both USER and ADMIN roles
 - Verify behavior using Postman
 
 ---
 
-## Part 14: Student Hands-On Activity
+## Part 15: Student Hands-On Activity
 
 ### Activity 2 (Student-Driven)
 
 Students should:
 - Secure remaining **simple CRM endpoints**
 - Apply appropriate role-based rules
-- Avoid endpoints involving JPA relationships
+- Avoid endpoints involving JPA relationships (for example, the Interaction endpoints)
 - Test using different users
 
 Suggested rules:
@@ -378,11 +456,26 @@ Suggested rules:
 
 ---
 
-## Part 15: Key Takeaways
+## Part 16: Troubleshooting
+
+**`There is no PasswordEncoder mapped for the id "null"`**  
+Your `PasswordEncoder` bean is missing, or a password was stored without encoding it.
+
+**Still getting 401 after setting the properties**  
+Restart the application. Also check there is no `UserDetailsService` bean overriding them.
+
+**403 when you expected access**  
+Check the role spelling and remember the `ROLE_` prefix rule from Part 11.
+
+**Generated password keeps changing**  
+That is expected. Use the `application.properties` approach from Part 5.
+
+---
+
+## Part 17: Key Takeaways
 
 - Spring Security intercepts requests before controllers
-- Authentication verifies identity
-- Authorization verifies permissions
+- Authentication verifies identity (401), authorization verifies permissions (403)
 - Passwords must always be encoded
 - Security should be applied incrementally
 - Simple examples build strong understanding
