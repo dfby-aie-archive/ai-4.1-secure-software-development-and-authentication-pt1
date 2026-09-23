@@ -414,7 +414,7 @@ public PasswordEncoder passwordEncoder() {
 
 BCrypt is the standard choice in the Spring world for two reasons beyond simply being a hash function.
 
-The first is **salting**. A plain hash always produces the same output for the same input, so two users who both chose `password123` would end up with identical stored hashes, and attackers can precompute hashes for millions of common passwords and simply look yours up. BCrypt defeats this by generating a random value, called a salt, for every single password and mixing it in before hashing. The same password hashed twice produces two completely different results. The salt is stored alongside the hash, so verification still works, and precomputed tables become useless. A quick way to see this for yourself: encode the same password twice and compare the output.
+The first is that the **same password does not produce the same stored value twice**. If you encode `password123` today and again tomorrow, you get two completely different results, and both still verify correctly at login. That matters because attackers keep huge ready-made lists of common passwords already scrambled. If everyone's stored value were identical for the same password, those lists would work instantly. With BCrypt they are useless.
 
 The second is that BCrypt is **deliberately slow**. Ordinary hash functions are designed to be fast, which is exactly what an attacker wants when trying billions of guesses. BCrypt includes a work factor that makes each hash take a noticeable amount of time. A real login is unaffected by a few hundred milliseconds. An attacker guessing their way through a stolen database very much is.
 
@@ -454,11 +454,9 @@ Notice that the password is passed through `passwordEncoder.encode(...)` before 
 
 > **Note:** `build()` returns a `UserDetails`, not a `User`. `User` is only the builder.
 
-### The `ROLE_` Prefix
+### Matching Roles in Rules
 
-Spring Security stores permissions as **authorities**, which are just strings. Roles are a convention layered on top of that: a role is simply an authority whose name begins with `ROLE_`.
-
-This is why `.roles("ADMIN")` actually stores the authority `ROLE_ADMIN`. The `roles()` method adds the prefix for you, and `hasRole("ADMIN")` adds it back when checking, so the two line up and everything works. The trap appears when you mix the two styles. `hasAuthority("ADMIN")` does **not** add a prefix, so it looks for an authority literally called `ADMIN`, does not find it because the stored value is `ROLE_ADMIN`, and denies the request with a 403 that is hard to explain. Stay with `roles()` and `hasRole()` together and you will not hit this.
+Whatever name you give a role in `roles(...)` is the name you use in `hasRole(...)`. Keep them spelled identically, including case, and the two line up. `roles("ADMIN")` pairs with `hasRole("ADMIN")`.
 
 Once this bean exists, the `spring.security.user.*` properties from Part 5 are ignored. You may remove them.
 
@@ -565,7 +563,7 @@ Restart the application. Also check there is no `UserDetailsService` bean overri
 Postman is still sending credentials and they are invalid. Set that request's Authorization tab to **No Auth**.
 
 **403 when you expected access**  
-Check the role spelling, and remember the `ROLE_` prefix rule from Part 11. Also check rule order — an earlier rule may have matched first.
+Check the role name is spelled the same in `roles(...)` and `hasRole(...)`, including case. Also check rule order — an earlier rule may have matched first.
 
 **Generated password keeps changing**  
 That is expected. Use the `application.properties` approach from Part 5.
@@ -579,7 +577,7 @@ That is expected. Use the `application.properties` approach from Part 5.
 - Authentication verifies identity (401), authorization verifies permissions (403)
 - Rules are evaluated top to bottom, first match wins, and `anyRequest()` must be last
 - `authorizeHttpRequests` decides what is protected; `httpBasic` decides how you prove who you are
-- Passwords must always be hashed, and BCrypt salts every one individually
+- Passwords must always be hashed, never stored as plain text
 - Rules match URLs, not classes, so changing a path changes its security
 
 ---
